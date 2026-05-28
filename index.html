@@ -269,23 +269,34 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:sans-serif}
 
 <!-- ── LOBBY ───────────────────────────────────────────────────── -->
 <div id="lobby">
-  <div id="lobby-box">
+  <div id="lobby-box" style="width:620px;max-width:95vw">
     <h1>☢ MYZ COMBAT</h1>
-    <p>Créez une salle ou rejoignez une partie existante avec un code.</p>
+    <p style="text-align:center;color:#5a5040;font-size:12px;margin-bottom:8px">Outil de combat pour Mutant: Year Zero</p>
 
-    <div>
-      <input class="lby-input" id="lby-pseudo" placeholder="Votre nom (ex: MJ, Hulk…)" maxlength="16" style="margin-bottom:8px">
-      <button class="lby-btn" onclick="createRoom()">✦ Créer une nouvelle salle</button>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch">
+
+      <!-- Créer -->
+      <div style="background:#111009;border:1px solid #3a3530;border-radius:10px 0 0 10px;padding:28px 24px;display:flex;flex-direction:column;gap:14px;align-items:center">
+        <div style="font-size:22px">🎲</div>
+        <div style="font-size:13px;font-weight:700;color:#ffd875;letter-spacing:1px">CRÉER UNE SALLE</div>
+        <div style="font-size:10px;color:#5a5040;text-align:center;line-height:1.5">Lance une nouvelle partie.<br>Partage le code avec tes joueurs.</div>
+        <button class="lby-btn" onclick="createRoom()" style="margin-top:auto">✦ Créer</button>
+      </div>
+
+      <!-- Séparateur -->
+      <div style="display:flex;align-items:center;justify-content:center;padding:0 16px;background:#0d0c09;color:#3a3530;font-size:12px;letter-spacing:1px;writing-mode:vertical-rl">OU</div>
+
+      <!-- Rejoindre -->
+      <div style="background:#111009;border:1px solid #3a3530;border-radius:0 10px 10px 0;padding:28px 24px;display:flex;flex-direction:column;gap:14px;align-items:center">
+        <div style="font-size:22px">⚔️</div>
+        <div style="font-size:13px;font-weight:700;color:#ffd875;letter-spacing:1px">REJOINDRE</div>
+        <div style="font-size:10px;color:#5a5040;text-align:center;line-height:1.5">Entre le code de salle<br>donné par le MJ.</div>
+        <input class="lby-input" id="lby-code" placeholder="Code (ex: WOLF-42)" maxlength="12" style="text-transform:uppercase;letter-spacing:2px;text-align:center;width:100%">
+        <button class="lby-btn sec" onclick="joinRoom()" style="margin-top:auto;width:100%">→ Rejoindre</button>
+      </div>
     </div>
 
-    <div class="lby-sep">ou rejoindre</div>
-
-    <div style="display:flex;gap:6px">
-      <input class="lby-input" id="lby-code" placeholder="Code de salle (ex: WOLF-42)" maxlength="12" style="text-transform:uppercase;letter-spacing:2px">
-      <button class="lby-btn sec" onclick="joinRoom()" style="width:auto;padding:9px 14px;flex-shrink:0">→</button>
-    </div>
-
-    <div id="lobby-status"></div>
+    <div id="lobby-status" style="text-align:center;margin-top:8px"></div>
   </div>
 </div>
 
@@ -293,7 +304,12 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:sans-serif}
 <div id="role-screen">
   <div id="role-box">
     <h2>☢ CHOISIR UN RÔLE</h2>
-    <p>Connecté en tant que <strong id="role-pseudo-display" style="color:#c4b89a"></strong></p>
+    <p id="role-room-hint" style="font-size:11px;color:#5a5040;text-align:center;line-height:1.5">Salle : <strong id="role-pseudo-display" style="color:#c4b89a;letter-spacing:1px"></strong></p>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <label style="font-size:11px;color:#8a7f6e">Ton pseudo</label>
+      <input class="lby-input" id="role-pseudo-input" placeholder="Pseudo…" maxlength="20" style="font-size:14px;text-align:center">
+    </div>
 
     <div class="role-cards">
       <div class="role-card" id="rc-gm" onclick="selectRole('gm')">
@@ -326,8 +342,8 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:sans-serif}
         <button class="lby-btn" onclick="createAndSelectPion()" style="padding:7px">Créer ce pion →</button>
       </div>
 
-      <!-- Ou choisir un existant -->
-      <div id="role-pion-existing" style="display:flex;flex-direction:column;gap:6px">
+      <!-- Ou choisir un existant (visible après connexion, rafraîchi depuis l'app) -->
+      <div id="role-pion-existing" style="display:none;flex-direction:column;gap:6px">
         <div style="font-size:11px;color:#5a5040;letter-spacing:.5px">— ou choisir un pion existant —</div>
         <div id="role-pion-list" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       </div>
@@ -881,7 +897,7 @@ function refreshRolePionList(){
   const list=document.getElementById('role-pion-list');
   const existingDiv=document.getElementById('role-pion-existing');
   const pjPions=pions.filter(p=>p.shape==='circle');
-  if(!pjPions.length){
+  if(!pjPions.length || !lbRoot){
     existingDiv.style.display='none';
   } else {
     existingDiv.style.display='flex';
@@ -925,18 +941,27 @@ function randomCode(){
 }
 function randomColor(){ return PRESENCE_COLORS[Math.floor(Math.random()*PRESENCE_COLORS.length)]; }
 
-async function createRoom(){
-  const pseudo = document.getElementById('lby-pseudo').value.trim()||'MJ';
-  const code   = randomCode();
-  setLobbyStatus('Création de la salle…');
-  await startSession(code, pseudo);
+// Pending session info — set when user picks create/join, consumed in confirmRole
+let _pendingCode = null;
+
+function createRoom(){
+  const code = randomCode();
+  _pendingCode = code;
+  setLobbyStatus('');
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('role-pseudo-display').textContent = code;
+  document.getElementById('role-pseudo-input').value = '';
+  document.getElementById('role-screen').style.display = 'flex';
 }
-async function joinRoom(){
-  const pseudo = document.getElementById('lby-pseudo').value.trim()||'Joueur';
-  const code   = document.getElementById('lby-code').value.trim().toUpperCase();
+function joinRoom(){
+  const code = document.getElementById('lby-code').value.trim().toUpperCase();
   if(!code){ setLobbyStatus('Entrez un code de salle.'); return; }
-  setLobbyStatus('Connexion…');
-  await startSession(code, pseudo);
+  _pendingCode = code;
+  setLobbyStatus('');
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('role-pseudo-display').textContent = code;
+  document.getElementById('role-pseudo-input').value = '';
+  document.getElementById('role-screen').style.display = 'flex';
 }
 // Expose immediately after definition so onclick= handlers work
 // even if the rest of the module hasn't finished loading yet
@@ -949,13 +974,12 @@ async function startSession(code, pseudo){
   try{
     await connectLiveblocks('myz-'+code, pseudo);
     document.getElementById('room-code-display').textContent = code;
-    document.getElementById('lobby').style.display = 'none';
-    // Show role selection screen
-    document.getElementById('role-pseudo-display').textContent = pseudo;
-    document.getElementById('role-screen').style.display = 'flex';
     document.getElementById('bg-file').addEventListener('change', onBgFileChange);
     initScenes();
   } catch(e){
+    // Show lobby back on error
+    document.getElementById('role-screen').style.display = 'none';
+    document.getElementById('lobby').style.display = 'flex';
     setLobbyStatus('Erreur de connexion : '+e.message);
   }
 }
@@ -971,7 +995,7 @@ function selectRole(role){
     myPionId=null;
   } else {
     pionSel.style.display='flex';
-    confirmBtn.style.display='none';
+    confirmBtn.style.display='block';
     myPionId=null;
     // Set default color selection
     document.querySelector('#role-pion-select .color-swatch.sel')?.classList.remove('sel');
@@ -991,22 +1015,22 @@ function rolePickColor(el){
   roleColor=el.dataset.c;
 }
 
+// Pion à créer après connexion (si joueur)
+let _pendingNewPion = null;
+
 function createAndSelectPion(){
-  const name=document.getElementById('role-new-name').value.trim()||myName||'Joueur';
-  // Create the pion directly in shared state
+  const name=document.getElementById('role-new-name').value.trim()||'Joueur';
+  if(!name){ document.getElementById('role-status').textContent='Entre un nom de personnage.'; return; }
   const id=Date.now();
-  const newPion={id, name, shape:'circle', color:roleColor,
+  _pendingNewPion={id, name, shape:'circle', color:roleColor,
     x:CANVAS_W/2+(Math.random()-.5)*200,
     y:CANVAS_H/2+(Math.random()-.5)*200,
     states:[], initiative:0, played:false};
-  pions.push(newPion);
-  pushState();
   myPionId=id;
-  document.getElementById('role-status').textContent='';
-  document.getElementById('role-confirm').style.display='block';
   // Visual feedback
   document.querySelectorAll('.rpion-btn').forEach(b=>b.classList.remove('sel'));
-  document.getElementById('role-status').textContent=`✓ Pion "${name}" créé !`;
+  document.getElementById('role-status').textContent=`✓ Pion "${name}" prêt — clique sur Entrer !`;
+  document.getElementById('role-confirm').style.display='block';
 }
 
 function selectMyPion(id){
@@ -1016,15 +1040,33 @@ function selectMyPion(id){
   document.getElementById('role-confirm').style.display='block';
 }
 
-function confirmRole(){
+async function confirmRole(){
+  const pseudo = document.getElementById('role-pseudo-input').value.trim() || (myRole==='gm' ? 'MJ' : 'Joueur');
   if(myRole==='player' && !myPionId){
-    document.getElementById('role-status').textContent='Sélectionne ton pion d\'abord.';
+    document.getElementById('role-status').textContent="Crée ou sélectionne ton pion d'abord.";
     return;
   }
-  document.getElementById('role-screen').style.display='none';
-  document.getElementById('app').style.display='flex';
-  applyRoleUI();
-  setTimeout(()=>{ resize(); renderExplZones(); renderPionList(); },80);
+  const roleStatusEl = document.getElementById('role-status');
+  roleStatusEl.textContent = 'Connexion…';
+  const confirmBtn = document.getElementById('role-confirm');
+  confirmBtn.disabled = true;
+  try {
+    await startSession(_pendingCode, pseudo);
+    // If player had a pending new pion to create, push it now that we're connected
+    if(myRole==='player' && _pendingNewPion){
+      pions.push(_pendingNewPion);
+      pushState();
+      _pendingNewPion = null;
+    }
+    document.getElementById('role-screen').style.display='none';
+    document.getElementById('app').style.display='flex';
+    applyRoleUI();
+    setTimeout(()=>{ resize(); renderExplZones(); renderPionList(); },80);
+  } catch(e) {
+    roleStatusEl.textContent = 'Erreur : ' + e.message;
+  } finally {
+    confirmBtn.disabled = false;
+  }
 }
 
 function applyRoleUI(){
