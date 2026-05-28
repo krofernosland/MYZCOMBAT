@@ -280,6 +280,15 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:sans-serif}
         <div style="font-size:22px">🎲</div>
         <div style="font-size:13px;font-weight:700;color:#ffd875;letter-spacing:1px">CRÉER UNE SALLE</div>
         <div style="font-size:10px;color:#5a5040;text-align:center;line-height:1.5">Lance une nouvelle partie.<br>Partage le code avec tes joueurs.</div>
+
+        <input
+          class="lby-input"
+          id="create-room-code"
+          placeholder="Code personnalisé (optionnel)"
+          maxlength="12"
+          style="text-transform:uppercase;letter-spacing:2px;text-align:center;width:100%"
+        >
+
         <button class="lby-btn" onclick="createRoom()" style="margin-top:auto">✦ Créer</button>
       </div>
 
@@ -749,7 +758,7 @@ function applyRemoteFog(data){
 // LIVEBLOCKS
 // ═══════════════════════════════════════════════════════════════
 let lbRoom=null, lbStorage=null, lbRoot=null;
-let myId=null, myName='', myColor='';
+let myId=crypto.randomUUID(), myName='', myColor='';
 let ignoreRemote=false; // prevent echo loop while we broadcast
 
 function setSyncDot(state){ // 'ok'|'wait'|'off'
@@ -774,6 +783,7 @@ async function connectLiveblocks(roomId, pseudo){
     }
   });
   lbRoom = room;
+  myId = lbRoom.getSelf()?.connectionId?.toString() || myId;
 
   // Connection status
   room.subscribe('status', status => {
@@ -909,6 +919,30 @@ function refreshRolePionList(){
   }
 }
 
+
+function getConnectedPlayers(){
+  if(!lbRoom) return [];
+
+  const others = lbRoom.getOthers();
+
+  return others
+    .toArray()
+    .map(o=>({
+      id:o.connectionId?.toString() || '',
+      name:o.presence?.name || 'Joueur'
+    }));
+}
+
+function assignPionOwner(pionId, ownerId){
+  const p = pions.find(x=>x.id===pionId);
+  if(!p) return;
+
+  p.ownerId = ownerId || null;
+
+  pushState();
+  renderPionList();
+}
+
 function pushState(partial={}){
   if(!lbRoot) return;
   ignoreRemote = true;
@@ -945,8 +979,18 @@ function randomColor(){ return PRESENCE_COLORS[Math.floor(Math.random()*PRESENCE
 let _pendingCode = null;
 
 function createRoom(){
-  const code = randomCode();
+  let code = document.getElementById('create-room-code').value
+    .trim()
+    .toUpperCase();
+
+  code = code.replace(/[^A-Z0-9\-]/g, '');
+
+  if(!code){
+    code = randomCode();
+  }
+
   _pendingCode = code;
+
   setLobbyStatus('');
   document.getElementById('lobby').style.display = 'none';
   document.getElementById('role-pseudo-display').textContent = code;
