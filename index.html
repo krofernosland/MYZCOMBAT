@@ -655,11 +655,7 @@ function updateZoneRadii(){
 // LOCAL STATE
 // ═══════════════════════════════════════════════════════════════
 let myRole='gm'; // 'gm' | 'player'
-let myPionIds=[]; // id du pion du joueur (si player)
-function canControlPion(pion){
-  if(myRole==='gm') return true;
-  return myPionIds.includes(pion.id);
-}
+let myPionId=null; // id du pion du joueur (si player)
 
 let tool='select', pions=[], selected=null, bgImg=null, bgData=null;
 let bgX=0, bgY=0, bgScale=1, bgDragging=false, bgDragStart={x:0,y:0}, bgPosStart={x:0,y:0};
@@ -908,9 +904,10 @@ function applyRemoteState(){
   // Apply pion assignments — if the GM assigned us a pion, update myPionId
   if(s.pionAssignments && myRole==='player' && myName){
     const assigned = s.pionAssignments[myName];
-if(assigned !== undefined && assigned !== myPionId){
-  myPionId = assigned;
-  applyRoleUI();
+    if(assigned !== undefined && assigned !== myPionId){
+      myPionId = assigned;
+      applyRoleUI();
+    }
   }
   if(!newBgData || bgImg) draw();
   // If the role screen is open on the player pion selection, refresh it live
@@ -2117,17 +2114,7 @@ function assignPion(pionId, playerName){
   const assignments = JSON.parse(JSON.stringify(lbRoot.get('pionAssignments') ?? {}));
   // Remove any previous assignment of this pion
   for(const k of Object.keys(assignments)){ if(assignments[k]===pionId) delete assignments[k]; }
-  if(playerName) if(!assignments[playerName])
-  assignments[playerName] = [];
-
-const arr = assignments[playerName];
-
-if(arr.includes(pion.id)){
-  assignments[playerName] =
-    arr.filter(id => id !== pion.id);
-}else{
-  assignments[playerName].push(pion.id);
-}
+  if(playerName) assignments[playerName] = pionId;
   ignoreRemote=true;
   lbRoot.set('pionAssignments', assignments);
   setTimeout(()=>{ ignoreRemote=false; },100);
