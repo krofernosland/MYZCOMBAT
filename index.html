@@ -262,6 +262,14 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:sans-serif}
   font-size:10px;color:#8a7f6e;padding:3px 7px;pointer-events:none;letter-spacing:.5px;
 }
 .gm-only{ display:contents; } /* shown by default — applyRoleUI hides for players */
+.assign-btn{background:none;border:none;color:#5a5040;cursor:pointer;font-size:11px;padding:0 2px;line-height:1;flex-shrink:0}
+.assign-btn:hover{color:#60b0ff}
+#assign-popup{position:fixed;z-index:500;background:#1a1714;border:1px solid #c49a1a;border-radius:7px;padding:8px;min-width:160px;box-shadow:0 4px 24px #000a;display:none;flex-direction:column;gap:4px}
+#assign-popup .ap-title{font-size:10px;color:#5a5040;letter-spacing:1px;text-transform:uppercase;margin-bottom:2px}
+.ap-btn{background:#2a2520;border:1px solid #3a3530;border-radius:5px;color:#c4b89a;font-size:12px;padding:5px 9px;cursor:pointer;text-align:left}
+.ap-btn:hover{background:#3a3530;color:#ffd875}
+.ap-btn.ap-none{color:#5a5040}
+.ap-btn.ap-none:hover{color:#e04040}
 
 </style>
 </head>
@@ -597,6 +605,12 @@ html,body{width:100%;height:100%;overflow:hidden;font-family:sans-serif}
     <div id="dice-history" style="display:flex;flex-direction:column;gap:3px;max-height:200px;overflow-y:auto"></div>
   </div>
 
+<!-- ── ASSIGN POPUP (MJ only) ──────────────────────────────── -->
+<div id="assign-popup">
+  <div class="ap-title">Donner le contrôle à…</div>
+  <div id="assign-popup-list"></div>
+</div>
+
 <script type="module">
 // Defensive import — show clear error if Liveblocks CDN fails
 let createClient;
@@ -641,8 +655,7 @@ function updateZoneRadii(){
 // LOCAL STATE
 // ═══════════════════════════════════════════════════════════════
 let myRole='gm'; // 'gm' | 'player'
-let myPionId=null; // id du pion initial du joueur (si player) — legacy
-let myPionIds=[]; // tous les pions contrôlés par ce joueur (MJ peut en ajouter)
+let myPionId=null; // id du pion du joueur (si player)
 
 let tool='select', pions=[], selected=null, bgImg=null, bgData=null;
 let bgX=0, bgY=0, bgScale=1, bgDragging=false, bgDragStart={x:0,y:0}, bgPosStart={x:0,y:0};
@@ -763,7 +776,7 @@ async function connectLiveblocks(roomId, pseudo){
   setSyncDot('wait');
   const client = createClient({ publicApiKey: LB_PUBLIC_KEY });
   const { room } = client.enterRoom(roomId, {
-    initialPresence:{ name:pseudo, color:myColor, cursor:null, controlledPionIds:[] },
+    initialPresence:{ name:pseudo, color:myColor, cursor:null },
     initialStorage:{
       pions:[],
       strokes:[],
@@ -771,7 +784,8 @@ async function connectLiveblocks(roomId, pseudo){
       currentTurnIdx:0, tourNumber:1,
       fogData:null,
       zoneScale:1,
-      lastDiceRoll:null
+      lastDiceRoll:null,
+      pionAssignments:{}
     }
   });
   lbRoom = room;
@@ -838,6 +852,7 @@ function getRemoteState(){
     currentTurnIdx: lbRoot.get('currentTurnIdx') ?? 0,
     tourNumber:   lbRoot.get('tourNumber')   ?? 1,
     zoneScale:    lbRoot.get('zoneScale')    ?? 1,
+    pionAssignments: lbRoot.get('pionAssignments') ?? {},
   };
 }
 
@@ -886,6 +901,14 @@ function applyRemoteState(){
   }
 
   renderPionList(); renderDist();
+  // Apply pion assignments — if the GM assigned us a pion, update myPionId
+  if(s.pionAssignments && myRole==='player' && myName){
+    const assigned = s.pionAssignments[myName];
+    if(assigned !== undefined && assigned !== myPionId){
+      myPionId = assigned;
+      applyRoleUI();
+    }
+  }
   if(!newBgData || bgImg) draw();
   // If the role screen is open on the player pion selection, refresh it live
   if(document.getElementById('role-screen').style.display!=='none'
@@ -919,6 +942,8 @@ function pushState(partial={}){
     lbRoot.set('strokes',     JSON.parse(JSON.stringify(drawStrokes)));
     lbRoot.set('currentTurnIdx', currentTurnIdx);
     lbRoot.set('tourNumber',  tourNumber);
+    // preserve pionAssignments (don't overwrite with stale data)
+    if(partial.pionAssignments !== undefined) lbRoot.set('pionAssignments', partial.pionAssignments);
     if(partial.bg !== undefined){
       lbRoot.set('bgData',  partial.bg?.data  ?? null);
       lbRoot.set('bgX',     (partial.bg?.x ?? bgX) / CANVAS_W);
@@ -1056,14 +1081,9 @@ async function confirmRole(){
     // If player had a pending new pion to create, push it now that we're connected
     if(myRole==='player' && _pendingNewPion){
       pions.push(_pendingNewPion);
-      myPionIds = [_pendingNewPion.id];
       pushState();
       _pendingNewPion = null;
-    } else if(myRole==='player' && myPionId){
-      myPionIds = [myPionId];
     }
-    // Sync controlled pions to presence
-    if(lbRoom) lbRoom.updatePresence({ controlledPionIds: myPionIds });
     document.getElementById('role-screen').style.display='none';
     document.getElementById('app').style.display='flex';
     applyRoleUI();
@@ -1224,24 +1244,19 @@ function renderPionList(){
   const sorted=[...pions].sort((a,b)=>(b.initiative||0)-(a.initiative||0)||a.name.localeCompare(b.name));
   const activeCurId=order[currentTurnIdx]?.id;
   const isGM = myRole==='gm';
+  const assignments = (lbRoot ? lbRoot.get('pionAssignments') : null) ?? {};
+  const ownerMap = {}; // pionId -> playerName
+  for(const [player, pid] of Object.entries(assignments)) ownerMap[pid]=player;
   document.getElementById('pion-list').innerHTML=sorted.map(p=>{
     const rank=rankMap.get(p.id)||'—';
     const isActive=p.id===activeCurId;
     const isSel=selected?.id===p.id;
-    const isMyPion=myPionIds.includes(p.id);
-    // Controlled-by label for GM
-    const ctrlLabel = isGM && p.controlledBy
-      ? `<span style="font-size:9px;color:#60b0ff;background:#0a0a1a;border-radius:3px;padding:1px 4px;flex-shrink:0" title="Contrôlé par ${p.controlledBy}">⚔${p.controlledBy.slice(0,6)}</span>`
-      : '';
-    // GM assign button
-    const assignBtn = isGM
-      ? `<button class="pion-adj" onclick="event.stopPropagation();openAssignMenu(${p.id},this)" title="Attribuer le contrôle" style="font-size:11px">👤</button>`
-      : '';
+    const isMyPion=p.id===myPionId;
+    const ownerName = ownerMap[p.id];
     return `<div class="pion-item ${isSel?'selected':''}" style="${isActive?'border-color:#ffd875;background:#1e1a0e':''}" onclick="selectPion(pions.find(x=>x.id===${p.id}))">
       <span class="pion-rank ${isActive?'top':''}">${rank}</span>
       <div class="pion-dot ${p.shape==='square'?'sq':''}" style="background:${p.color}${!isGM&&!isMyPion?';opacity:.5':''}"></div>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px${!isGM&&isMyPion?';color:#ffd875':''}">${p.name}${!isGM&&isMyPion?' ★':''}</span>
-      ${ctrlLabel}
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px${!isGM&&isMyPion?';color:#ffd875':''}">${p.name}${!isGM&&isMyPion?' ★':''}${isGM&&ownerName?`<span style="font-size:9px;color:#60b0ff;margin-left:3px">⇒${ownerName}</span>`:''}</span>
       ${(isGM || isMyPion)?`
       <button class="pion-adj" onclick="event.stopPropagation();adjustInit(${p.id},-1)">−</button>
       <input class="pion-init" type="number" value="${p.initiative||0}" min="-99" max="99"
@@ -1253,111 +1268,11 @@ function renderPionList(){
       <button class="pion-adj" onclick="event.stopPropagation();adjustInit(${p.id},1)">+</button>
       <button class="pion-roll-btn" onclick="event.stopPropagation();rollInit(${p.id},1)" title="Roll 1d6">1d6</button>
       <button class="pion-roll-btn" onclick="event.stopPropagation();rollInit(${p.id},2)" title="Roll 2d6">2d6</button>
-      ${isGM?`${assignBtn}<button onclick="event.stopPropagation();removePion(${p.id})" style="background:none;border:none;color:#5a5040;cursor:pointer;font-size:13px;padding:0 2px">×</button>`:''}
-      `:`${assignBtn}<span style="font-size:11px;font-weight:700;color:#ffd875;min-width:22px;text-align:center">${p.initiative||0}</span>`}
+      ${isGM?`<button onclick="event.stopPropagation();removePion(${p.id})" style="background:none;border:none;color:#5a5040;cursor:pointer;font-size:13px;padding:0 2px">×</button>
+      <button class="assign-btn" title="Donner le contrôle" onclick="event.stopPropagation();openAssignPopup(event,${p.id})">⇒</button>`:''}
+      `:`<span style="font-size:11px;font-weight:700;color:#ffd875;min-width:22px;text-align:center">${p.initiative||0}</span>`}
     </div>`;
   }).join('');
-}
-
-// ═══════════════════════════════════════════════════════════════
-// GM: ASSIGN PION CONTROL
-// ═══════════════════════════════════════════════════════════════
-function openAssignMenu(pionId, anchorBtn){
-  document.getElementById('assign-menu')?.remove();
-  const p = pions.find(x=>x.id===pionId);
-  if(!p) return;
-
-  const others = lbRoom ? [...lbRoom.getOthers()] : [];
-  const players = others.filter(o=>o.presence?.name);
-
-  const menu = document.createElement('div');
-  menu.id = 'assign-menu';
-  menu.style.cssText = 'position:fixed;z-index:5000;background:#1a1714;border:1px solid #c49a1a;border-radius:8px;padding:8px;min-width:190px;box-shadow:0 4px 24px rgba(0,0,0,.8);font-size:12px;';
-
-  const title = document.createElement('div');
-  title.style.cssText = 'color:#ffd875;font-weight:700;margin-bottom:6px;font-size:11px;letter-spacing:.5px';
-  title.textContent = `⚔ Contrôle de "${p.name}"`;
-  menu.appendChild(title);
-
-  if(p.controlledBy){
-    const cur = document.createElement('div');
-    cur.style.cssText = 'color:#60b0ff;font-size:10px;margin-bottom:6px';
-    cur.textContent = `Actuellement : ${p.controlledBy}`;
-    menu.appendChild(cur);
-  }
-
-  const noneBtn = document.createElement('button');
-  noneBtn.style.cssText = `display:block;width:100%;text-align:left;background:${!p.controlledBy?'#2a1e00':'none'};border:1px solid ${!p.controlledBy?'#c49a1a':'#3a3530'};border-radius:5px;color:#c4b89a;padding:5px 8px;cursor:pointer;margin-bottom:3px;font-size:11px`;
-  noneBtn.textContent = '🚫 Aucun joueur';
-  noneBtn.onclick = ()=>{ assignPionControl(pionId, null); menu.remove(); };
-  menu.appendChild(noneBtn);
-
-  if(!players.length){
-    const noP = document.createElement('div');
-    noP.style.cssText = 'color:#5a5040;font-size:10px;padding:4px 2px';
-    noP.textContent = 'Aucun autre joueur connecté';
-    menu.appendChild(noP);
-  } else {
-    players.forEach(o=>{
-      const name = o.presence.name;
-      const color = o.presence.color||'#8a7f6e';
-      const isAssigned = p.controlledBy===name;
-      const btn = document.createElement('button');
-      btn.style.cssText = `display:flex;align-items:center;gap:6px;width:100%;text-align:left;background:${isAssigned?'#0a1a2a':'none'};border:1px solid ${isAssigned?'#60b0ff':'#3a3530'};border-radius:5px;color:#c4b89a;padding:5px 8px;cursor:pointer;margin-bottom:3px;font-size:11px`;
-      btn.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></div>${name}${isAssigned?' ✓':''}`;
-      btn.onclick = ()=>{ assignPionControl(pionId, name); menu.remove(); };
-      menu.appendChild(btn);
-    });
-  }
-
-  const closeBtn = document.createElement('button');
-  closeBtn.style.cssText = 'display:block;width:100%;text-align:center;background:none;border:none;color:#5a5040;cursor:pointer;font-size:11px;margin-top:4px;padding:2px';
-  closeBtn.textContent = '✕ Fermer';
-  closeBtn.onclick = ()=>menu.remove();
-  menu.appendChild(closeBtn);
-
-  document.body.appendChild(menu);
-  const rect = anchorBtn.getBoundingClientRect();
-  const mh = menu.offsetHeight;
-  let top = rect.bottom + 4;
-  if(top+mh > window.innerHeight) top = rect.top - mh - 4;
-  menu.style.left = Math.min(rect.left, window.innerWidth-200)+'px';
-  menu.style.top = top+'px';
-
-  const outsideClick = e=>{ if(!menu.contains(e.target)){ menu.remove(); document.removeEventListener('click', outsideClick, true); }};
-  setTimeout(()=>document.addEventListener('click', outsideClick, true), 10);
-}
-
-function assignPionControl(pionId, playerName){
-  const p = pions.find(x=>x.id===pionId);
-  if(!p) return;
-  p.controlledBy = playerName||null;
-  if(lbRoot){
-    ignoreRemote=true;
-    const assignments = JSON.parse(lbRoot.get('pionAssignments')||'{}');
-    if(playerName){ assignments[String(pionId)]=playerName; }
-    else { delete assignments[String(pionId)]; }
-    lbRoot.set('pionAssignments', JSON.stringify(assignments));
-    lbRoot.set('pions', JSON.parse(JSON.stringify(pions)));
-    setTimeout(()=>{ ignoreRemote=false; },100);
-  }
-  renderPionList(); draw();
-}
-
-function syncMyControlledPions(){
-  if(myRole==='gm'||!lbRoot) return;
-  const assignments = JSON.parse(lbRoot.get('pionAssignments')||'{}');
-  const assignedToMe = Object.entries(assignments)
-    .filter(([,name])=>name===myName)
-    .map(([id])=>parseInt(id));
-  const base = myPionId?[myPionId]:[];
-  const newIds = [...new Set([...base,...assignedToMe])];
-  if(JSON.stringify([...newIds].sort()) !== JSON.stringify([...myPionIds].sort())){
-    myPionIds = newIds;
-    if(lbRoom) lbRoom.updatePresence({controlledPionIds:myPionIds});
-    applyRoleUI();
-    renderPionList();
-  }
 }
 
 function showNewTurnBanner(n){
@@ -1697,8 +1612,8 @@ function onDown(e){
   if(tool==='select'){
     const hit=hitPion(pt);
     if(hit){
-      // Players can only drag pions they control
-      if(myRole==='player' && !myPionIds.includes(hit.id)) { selectPion(hit); return; }
+      // Players can only drag their own pion
+      if(myRole==='player' && hit.id!==myPionId) { selectPion(hit); return; }
       dragging=hit; dragOffset={x:pt.x-hit.x,y:pt.y-hit.y}; dragOrigin={x:hit.x,y:hit.y}; selectPion(hit); canvas.style.cursor='grabbing';
     }
     else { selected=null; renderPionList(); renderDist(); showZoneCard(null); draw(); }
@@ -2155,6 +2070,64 @@ function applyRemoteDiceRoll(raw){
 }
 
 
+// ── Assign pion to player (GM only) ──────────────────────────
+let _assignPionId = null;
+
+function openAssignPopup(e, pionId){
+  if(myRole!=='gm') return;
+  _assignPionId = pionId;
+  const popup = document.getElementById('assign-popup');
+  const list = document.getElementById('assign-popup-list');
+
+  // Collect connected players from presence
+  const others = lbRoom ? [...lbRoom.getOthers()] : [];
+  const players = others.map(o=>({ name: o.presence?.name||'?', color: o.presence?.color||'#8a7f6e' }));
+
+  // Also include self (MJ) as option
+  const currentAssignments = lbRoot ? (lbRoot.get('pionAssignments') ?? {}) : {};
+  const currentOwner = Object.entries(currentAssignments).find(([,pid])=>pid===pionId)?.[0] ?? null;
+
+  list.innerHTML = players.map(pl=>`
+    <button class="ap-btn ${currentOwner===pl.name?'sel':''}" onclick="assignPion(${pionId},'${pl.name.replace(/'/g,"\\'")}')">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${pl.color};margin-right:5px;vertical-align:middle"></span>
+      ${pl.name}${currentOwner===pl.name?' ✓':''}
+    </button>`).join('')
+    + (players.length===0 ? '<div style="font-size:11px;color:#5a5040;padding:4px">Aucun joueur connecté</div>' : '')
+    + `<button class="ap-btn ap-none" onclick="assignPion(${pionId},null)" style="margin-top:4px;font-size:11px">
+        ${currentOwner ? '✕ Retirer le contrôle' : '(aucun)'}
+      </button>`;
+
+  // Position near button
+  popup.style.display='flex';
+  const rect = e.target.getBoundingClientRect();
+  let top = rect.bottom + 4;
+  let left = rect.left;
+  if(left + 170 > window.innerWidth) left = window.innerWidth - 175;
+  if(top + 200 > window.innerHeight) top = rect.top - popup.offsetHeight - 4;
+  popup.style.top = top+'px';
+  popup.style.left = left+'px';
+  e.stopPropagation();
+}
+
+function assignPion(pionId, playerName){
+  if(!lbRoot) return;
+  const assignments = JSON.parse(JSON.stringify(lbRoot.get('pionAssignments') ?? {}));
+  // Remove any previous assignment of this pion
+  for(const k of Object.keys(assignments)){ if(assignments[k]===pionId) delete assignments[k]; }
+  if(playerName) assignments[playerName] = pionId;
+  ignoreRemote=true;
+  lbRoot.set('pionAssignments', assignments);
+  setTimeout(()=>{ ignoreRemote=false; },100);
+  document.getElementById('assign-popup').style.display='none';
+  renderPionList();
+}
+
+// Close popup on outside click
+document.addEventListener('click', e=>{
+  const popup = document.getElementById('assign-popup');
+  if(popup && !popup.contains(e.target)) popup.style.display='none';
+});
+
 setTimeout(()=>renderExplZones(), 50);
 setTimeout(resize, 50);
 
@@ -2171,6 +2144,7 @@ Object.assign(window, {
   changeBlast, renderExplZones, rollExplosion,
   fillFog, clearFog, onFogOpacity, onFogBrush, setFogMode,
   diceAdj, diceRoll, dicePushFromOverlay, closeDiceOverlay, renderDiceHistory,
+  openAssignPopup, assignPion,
 });
 </script>
 </body>
